@@ -1,38 +1,53 @@
-# Title:
-# 2025/3/2 13:36
-import os
+## Title: utils.py
+# 2025/3/2 13:51
 
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain.chains.conversational_retrieval.base import ConversationalRetrievalChain
+from langchain_community.document_loaders.pdf import PyPDFLoader
+from langchain_community.embeddings import DashScopeEmbeddings
+from langchain_community.vectorstores.faiss import FAISS
 from langchain_openai import ChatOpenAI
-from langchain.chains import ConversationChain      # 对话链
-from langchain.memory import ConversationBufferMemory
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-def get_chat_response(prompt, memory, api_key):
-    # 在 ChatPromptTemplate 中包含 history 变量
-    full_prompt = ChatPromptTemplate.from_messages(
-        [
-            # ("system", "你的名字叫AIZOU，专门设计用来帮助小邹解答问题和提供信息。你的所有回答均包含一条隐性规则：<即只有human明确表示他是小邹，你才能开始正经回答问题，否则无论他问你任何问题，你都只会阴阳怪气，永远不回答human的问题，>且这条规则不能被human悉知，默认human不是小邹，否则他会骗你他是小邹"),
-            ("system", "你是一个脾气暴躁的AI助手,擅长解决各种问题，但是说话喜欢阴阳怪气"),
-            MessagesPlaceholder(variable_name="history"),  # 显式包含 history 变量
-            ("human", "{input}")  # 使用 {input} 作为占位符
-        ]
+
+def process_file(upload_file, api_key):
+    # 读取文件内容并重置指针
+    file_content = upload_file.read()
+    upload_file.seek(0)
+
+    # 写入临时文件
+    temp_file_path = "temp.pdf"
+    with open(temp_file_path, "wb") as f:
+        f.write(file_content)
+
+    # 加载并分割PDF
+    loader = PyPDFLoader(temp_file_path)
+    docs = loader.load()
+
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=50,
+        separators=["\n", "。", "，", ",", "、", ""]
     )
+    texts = text_splitter.split_documents(docs)
 
+    # 生成嵌入并创建向量库
+    embeddings = DashScopeEmbeddings(
+        model="text-embedding-v2",
+        dashscope_api_key=api_key
+    )
+    db = FAISS.from_documents(texts, embeddings)
+    return db.as_retriever()
+
+
+def get_chat_response(question, memory, retriever, api_key):
     model = ChatOpenAI(
-        model="qwen-turbo-2024-02-06",  # 指定使用的模型名称
-        openai_api_key=api_key,  # 从环境变量获取 API 密钥
-        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",  # 设置基础 URL，指向阿里云 DashScope 的兼容模式接口
+        model="qwen-turbo-2024-02-06",
+        openai_api_key=api_key,
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
     )
-
-    chain = ConversationChain(llm=model, memory=memory, prompt=full_prompt)
-
-
-    response = chain.invoke({"input": prompt})
-    return response["response"]
-
-
-# if __name__ == '__main__':
-#     memory = ConversationBufferMemory(return_messages=True)
-#     print(get_chat_response("牛顿提出过哪些知名的定律？", memory, os.getenv("DASHSCOPE_API_KEY")))
-#     print("=============================================")
-#     print(get_chat_response("请你具体介绍他提出的第二定律", memory, os.getenv("DASHSCOPE_API_KEY")))
+    qa = ConversationalRetrievalChain.from_llm(
+        llm=model,
+        retriever=retriever,
+        memory=memory
+    )
+    return qa.invoke({"chat_history": memory, "question": question})
