@@ -3,9 +3,9 @@
 import io
 import hashlib
 import streamlit as st
+from openai import AuthenticationError
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
-# import os
 from utils import get_chat_response, process_file
 from langchain.memory import ConversationBufferMemory
 
@@ -73,10 +73,19 @@ if prompt:
 
     # 检查文件是否变化
     if "cached_file_hash" not in st.session_state or st.session_state["cached_file_hash"] != current_hash:
-        with st.spinner("正在处理文件..."):
-            retriever = process_file(current_file, api_key)
-            st.session_state["cached_retriever"] = retriever
-            st.session_state["cached_file_hash"] = current_hash
+        try:
+            with st.spinner("正在处理文件..."):
+                retriever = process_file(current_file, api_key)
+                st.session_state["cached_retriever"] = retriever
+                st.session_state["cached_file_hash"] = current_hash
+        except ValueError as e:
+            # 捕获 ValueError 并提示用户
+            st.error("❌ 请输入正确的DashScope API Key")
+            st.stop()
+        except Exception as e:
+            # 捕获其他异常并提示用户
+            st.error(f"❌ 发生错误：{str(e)}")
+            st.stop()
     else:
         retriever = st.session_state["cached_retriever"]
 
